@@ -249,12 +249,15 @@ bayes_result <- wf_tune %>%
 
 bayes_result
 
+# 予測精度を確認
 bayes_result %>%
   tune::collect_metrics()
 
+# 一番良かったハイパーパラメータでの予測精度を確認
 bayes_result %>%
   tune::show_best()
 
+# 一番良かったモデルを抽出
 best_model <- bayes_result %>%
   tune::select_best()
 
@@ -262,8 +265,7 @@ best_model <- bayes_result %>%
 # 一番良かったモデルで最終結果を確認 -------------------------------------------------------
 
 # 一番良かったモデルにアップデート
-wf_final <-
-  wf_tune %>%
+wf_final <- wf_tune %>%
   tune::finalize_workflow(best_model)
 
 # 全訓練データで学習して、テストデータで予測
