@@ -7,15 +7,39 @@ library(tidylog) # 処理のログが出て嬉しい
 library(DALEX) # モデルの解釈
 library(sf) # 地図可視化
 
+library(glue) # 変数を文字列にいれられる
+library(skimr) # データ確認用
+
 set.seed(42) # 同じ結果が出るように
 
-# データの読み込みと確認 ----------------------------------------------------------------
+# データの読み込み----------------------------------------------------------------
 
 # Ames Housing Data
 # データの説明：http://jse.amstat.org/v19n3/decock/DataDocumentation.txt
 data(ames, package = "modeldata")
 
-# データの確認
+# 必要な地図情報をダウンロードして展開する
+# https://mapcruzin.com/free-united-states-shapefiles/free-iowa-arcgis-maps-shapefiles.htm
+download_iowa_highway <- function(target) {
+  # 地図情報をダウンロード
+  download.file(
+    url = glue("https://mapcruzin.com/download-shapefile/us/{target}.zip"),
+    destfile = "iowa_highway.zip"
+  )
+
+  # zip fileを解凍
+  unzip(zipfile = glue("{target}.zip"), exdir = target)
+
+  # 元のzip fileを削除
+  file.remove(glue("{target}.zip"))
+}
+download_iowa_highway(target = "iowa_highway")
+
+iowa_highway <- st_read(dsn = "iowa_highway/iowa_highway.shp")
+
+
+# データの確認-------------------------------------------------------------------------
+
 ames
 ames %>% glimpse()
 ames %>% summary()
@@ -81,26 +105,17 @@ plot_map <- function(df, map_info, color_var) {
     theme_void()
 }
 
-# 地図情報をダウンロードしてくる
-# https://mapcruzin.com/free-united-states-shapefiles/free-iowa-arcgis-maps-shapefiles.htm
-iowa_highway <- st_read(dsn = "iowa_highway/iowa_highway.shp")
-
 ames %>%
   plot_map(iowa_highway, log(Sale_Price))
 
-# データの分割 ------------------------------------------------------------------
 
-# 目的変数の対数をとっておく
-df <- ames %>%
-  as_tibble() %>%
-  mutate(log_Sale_Price = log(Sale_Price)) %>%
-  select(!Sale_Price)
+# データの分割 ------------------------------------------------------------------
 
 # 訓練データとテストデータに分割
 train_test_split <- rsample::initial_split(
-  df,
+  ames,
   prop = 3 / 4, # 訓練データの割合
-  strata = "log_Sale_Price" # 一応目的変数の分布がずれないようにしておく
+  strata = "Sale_Price" # 一応目的変数の分布がずれないようにしておく
 )
 
 train_test_split
@@ -113,9 +128,15 @@ df_train
 df_test
 
 
-# モデルの定義とワークフローの作成 -----------------------------------------------------------
+# 前処理 ---------------------------------------------------------------------
 
-# モデルの定義
+# 目的変数の対数だけとる
+rec <- recipes::recipe(Sale_Price ~ ., data = df_train) %>%
+  step_log(Sale_Price)
+
+
+# モデルの定義 -----------------------------------------------------------
+
 # Random Forestを利用。ハイパーパラメータいじらなくてもそれなりに精度がいいので
 model <- parsnip::rand_forest() %>%
   parsnip::set_engine(
@@ -125,11 +146,16 @@ model <- parsnip::rand_forest() %>%
   ) %>%
   parsnip::set_mode("regression") # 分類なら"classification"
 
-# ワークフローの作成
+
+# ワークフローの作成-------------------------------------------------------------------------
+
 # 前処理をしたrecipeがあるならそれもadd_recipe()で追加する
 wf <- workflows::workflow() %>%
   workflows::add_model(model) %>% # モデルの指定
-  workflows::add_formula(log_Sale_Price ~ .) # 目的変数と特徴量を指定。大体これでいい
+  workflows::add_recipe(rec)
+
+
+# モデルの学習と予測 ---------------------------------------------------------------
 
 # last_fit()は全訓練データで学習して、テストデータで予測する
 # 本来はCVでハイパーパラメータをチューニングしてから使うが、便利なので
@@ -151,7 +177,7 @@ first_pred
 # 予測値と実測値を比較
 plot_pred_actual <- function(df, actual_var) {
   lims <- extendrange(pull(df, {{ actual_var }}))
-  df_pred %>%
+  df %>%
     ggplot(aes(x = {{ actual_var }}, y = .pred)) +
     geom_abline(color = "gray", size = 1) +
     geom_point(alpha = 0.3) +
@@ -160,18 +186,17 @@ plot_pred_actual <- function(df, actual_var) {
 }
 
 first_pred %>%
-  plot_pred_actual(log_Sale_Price)
+  plot_pred_actual(Sale_Price)
 
 
 # Cross Validation --------------------------------------------------------
-
 
 # 訓練データを、さらに訓練データとバリデーションデータに分割
 # 4 fold cross validation
 cv_split <- rsample::vfold_cv(
   df_train,
   v = 4, # 何分割するか
-  strata = "log_Sale_Price"
+  strata = "Sale_Price"
 )
 
 cv_split
@@ -254,14 +279,15 @@ final_result %>%
 first_result %>%
   tune::collect_metrics()
 
+
 # モデルを解釈 ------------------------------------------------------------------
 
 # 解釈に利用するデータと目的変数を指定する
 explainer <- final_result %>%
-  workflows::extract_fit_parsnip() %>%　# モデルを取り出す
+  workflows::extract_fit_parsnip() %>% # モデルを取り出す
   DALEX::explain(
-    data = df_test %>% select(!log_Sale_Price),
-    y = df_test %>% pull(log_Sale_Price),
+    data = df_test %>% select(!Sale_Price),
+    y = log(df_test$Sale_Price),
     label = "Random Forest"
   )
 
@@ -269,7 +295,7 @@ explainer <- final_result %>%
 # 説明変数の重要度
 # Bはシャッフルの回数。重いので1にした。データ量によるが、10回くらいやったほうがいいと思う
 pfi <- explainer %>%
-  DALEX::model_parts(B = 1) 
+  DALEX::model_parts(B = 1)
 
 pfi %>%
   plot(max_vars = 10)
@@ -301,7 +327,7 @@ ice %>%
 # type = "shap"とするとSHapley Additive exPlanationsになるが、めっちゃ重い
 bd <- explainer %>%
   DALEX::predict_parts(
-    new_observation = df_test %>% head(1),
+    new_observation = df_test %>% sample_n(1),
     type = "break_down"
   )
 
