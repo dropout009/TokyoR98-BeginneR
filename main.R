@@ -127,14 +127,6 @@ df_train
 
 df_test
 
-
-# 前処理 ---------------------------------------------------------------------
-
-# 目的変数の対数だけとる
-rec <- recipes::recipe(Sale_Price ~ ., data = df_train) %>%
-  step_log(Sale_Price)
-
-
 # モデルの定義 -----------------------------------------------------------
 
 # Random Forestを利用。ハイパーパラメータいじらなくてもそれなりに精度がいいので
@@ -147,12 +139,19 @@ model <- parsnip::rand_forest() %>%
   parsnip::set_mode("regression") # 分類なら"classification"
 
 
+# 前処理 ---------------------------------------------------------------------
+
+# 目的変数の対数だけとる
+rec <- recipes::recipe(Sale_Price ~ ., data = df_train) %>%
+  recipes::step_log(Sale_Price)
+
+
 # ワークフローの作成-------------------------------------------------------------------------
 
 # 前処理をしたrecipeがあるならそれもadd_recipe()で追加する
 wf <- workflows::workflow() %>%
   workflows::add_model(model) %>% # モデルの指定
-  workflows::add_recipe(rec)
+  workflows::add_recipe(rec) #前処理レシピの指定
 
 
 # モデルの学習と予測 ---------------------------------------------------------------
